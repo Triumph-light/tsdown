@@ -1,34 +1,47 @@
-import process from 'node:process'
+import { blue } from 'ansis'
 import { debounce, toArray } from '../utils/general'
 import { logger } from '../utils/logger'
 import type { ResolvedOptions } from '../options'
 import type { FSWatcher } from 'chokidar'
 
-const endsWithPackageJson = /[\\/]package\.json$/
+const endsWithConfig = /[\\/](?:package\.json|tsdown\.config.*)$/
 
 export async function watchBuild(
   options: ResolvedOptions,
-  configFile: string | undefined,
+  configFiles: string[],
   rebuild: () => void,
   restart: () => void,
 ): Promise<FSWatcher> {
-  const { watch } = await import('chokidar')
-  const debouncedRebuild = debounce(rebuild, 100)
+  if (typeof options.watch === 'boolean' && options.outDir === options.cwd) {
+    throw new Error(
+      `Watch is enabled, but output directory is the same as the current working directory.` +
+        `Please specify a different watch directory using ${blue`watch`} option,` +
+        `or set ${blue`outDir`} to a different directory.`,
+    )
+  }
 
   const files = toArray(
-    typeof options.watch === 'boolean' ? process.cwd() : options.watch,
+    typeof options.watch === 'boolean' ? options.cwd : options.watch,
   )
   logger.info(`Watching for changes in ${files.join(', ')}`)
-  if (configFile) files.push(configFile)
+  files.push(...configFiles)
+
+  const { watch } = await import('chokidar')
+  const debouncedRebuild = debounce(rebuild, 100)
 
   const watcher = watch(files, {
     ignoreInitial: true,
     ignorePermissionErrors: true,
-    ignored: [/[\\/]\.git[\\/]/, /[\\/]node_modules[\\/]/, options.outDir],
+    ignored: [
+      /[\\/]\.git[\\/]/,
+      /[\\/]node_modules[\\/]/,
+      options.outDir,
+      ...toArray(options.ignoreWatch),
+    ],
   })
 
   watcher.on('all', (type: string, file: string) => {
-    if (endsWithPackageJson.test(file) || configFile === file) {
+    if (configFiles.includes(file) || endsWithConfig.test(file)) {
       logger.info(`Reload config: ${file}`)
       restart()
       return

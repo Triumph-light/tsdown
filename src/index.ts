@@ -1,20 +1,30 @@
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
+import { green } from 'ansis'
 import {
   build as rolldownBuild,
   type BuildOptions,
+  type OutputAsset,
+  type OutputChunk,
   type OutputOptions,
   type RolldownPluginOption,
 } from 'rolldown'
-import { transformPlugin } from 'rolldown/experimental'
 import { exec } from 'tinyexec'
+import { attw } from './features/attw'
 import { cleanOutDir } from './features/clean'
+import { copy } from './features/copy'
+import { writeExports } from './features/exports'
 import { ExternalPlugin } from './features/external'
-import { resolveOutputExtension } from './features/output'
+import { createHooks } from './features/hooks'
+import { LightningCSSPlugin } from './features/lightningcss'
+import { NodeProtocolPlugin } from './features/node-protocol'
+import { resolveChunkFilename } from './features/output'
 import { publint } from './features/publint'
+import { ReportPlugin } from './features/report'
 import { getShimsInject } from './features/shims'
 import { shortcuts } from './features/shortcuts'
+import { RuntimeHelperCheckPlugin } from './features/target'
 import { watchBuild } from './features/watch'
 import {
   mergeUserOptions,
@@ -22,11 +32,10 @@ import {
   type NormalizedFormat,
   type Options,
   type ResolvedOptions,
-  type UserConfig,
 } from './options'
-import { debug, logger, setSilent } from './utils/logger'
-import { readPackageJson } from './utils/package'
-import type { PackageJson } from 'pkg-types'
+import { ShebangPlugin } from './plugins'
+import { lowestCommonAncestor } from './utils/fs'
+import { logger, prettyName } from './utils/logger'
 import type { Options as DtsOptions } from 'rolldown-plugin-dts'
 
 /**
@@ -34,22 +43,28 @@ import type { Options as DtsOptions } from 'rolldown-plugin-dts'
  */
 export async function build(userOptions: Options = {}): Promise<void> {
   if (typeof userOptions.silent === 'boolean') {
-    setSilent(userOptions.silent)
+    logger.setSilent(userOptions.silent)
   }
 
-  debug('Loading config')
-  const { configs, file: configFile } = await resolveOptions(userOptions)
-  if (configFile) debug('Loaded config:', configFile)
-  else debug('No config file found')
+  const { configs, files: configFiles } = await resolveOptions(userOptions)
 
-  const rebuilds = await Promise.all(configs.map(buildSingle))
+  let cleanPromise: Promise<void> | undefined
+  const clean = () => {
+    if (cleanPromise) return cleanPromise
+    return (cleanPromise = cleanOutDir(configs))
+  }
+
+  logger.info('Build start')
+  const rebuilds = await Promise.all(
+    configs.map((options) => buildSingle(options, clean)),
+  )
   const cleanCbs: (() => Promise<void>)[] = []
 
   for (const [i, config] of configs.entries()) {
     const rebuild = rebuilds[i]
     if (!rebuild) continue
 
-    const watcher = await watchBuild(config, configFile, rebuild, restart)
+    const watcher = await watchBuild(config, configFiles, rebuild, restart)
     cleanCbs.push(() => watcher.close())
   }
 
@@ -66,20 +81,29 @@ export async function build(userOptions: Options = {}): Promise<void> {
 }
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
-export const pkgRoot: string = path.resolve(dirname, '..')
+const pkgRoot: string = path.resolve(dirname, '..')
+export const shimFile: string = path.resolve(pkgRoot, 'esm-shims.js')
+
+export type TsdownChunks = Partial<
+  Record<NormalizedFormat, Array<OutputChunk | OutputAsset>>
+>
 
 /**
  * Build a single configuration, without watch and shortcuts features.
  *
+ * Internal API, not for public use
+ *
+ * @private
  * @param config Resolved options
  */
 export async function buildSingle(
   config: ResolvedOptions,
+  clean: () => Promise<void>,
 ): Promise<(() => Promise<void>) | undefined> {
-  const { outDir, format: formats, clean, dts, watch, onSuccess } = config
-  let onSuccessCleanup: (() => any) | undefined
+  const { format: formats, dts, watch, onSuccess } = config
+  let ab: AbortController | undefined
 
-  const pkg = await readPackageJson(process.cwd())
+  const { hooks, context } = await createHooks(config)
 
   await rebuild(true)
   if (watch) {
@@ -89,18 +113,34 @@ export async function buildSingle(
   async function rebuild(first?: boolean) {
     const startTime = performance.now()
 
-    onSuccessCleanup?.()
-    if (clean) await cleanOutDir(outDir, clean)
+    await hooks.callHook('build:prepare', context)
+    ab?.abort()
+
+    await clean()
 
     let hasErrors = false
+    const isMultiFormat = formats.length > 1
+    const chunks: TsdownChunks = {}
     await Promise.all(
       formats.map(async (format) => {
         try {
-          await rolldownBuild(await getBuildOptions(config, pkg, format))
+          const buildOptions = await getBuildOptions(
+            config,
+            format,
+            isMultiFormat,
+            false,
+          )
+          await hooks.callHook('build:before', {
+            ...context,
+            buildOptions,
+          })
+          const { output } = await rolldownBuild(buildOptions)
+          chunks[format] = output
           if (format === 'cjs' && dts) {
-            await rolldownBuild(
-              await getBuildOptions(config, pkg, format, true),
+            const { output } = await rolldownBuild(
+              await getBuildOptions(config, format, isMultiFormat, true),
             )
+            chunks[format].push(...output)
           }
         } catch (error) {
           if (watch) {
@@ -117,40 +157,39 @@ export async function buildSingle(
       return
     }
 
-    if (config.publint) {
-      if (pkg) {
-        await publint(pkg)
-      } else {
-        logger.warn('publint is enabled but package.json is not found')
-      }
-    }
+    await Promise.all([writeExports(config, chunks), copy(config)])
+    await Promise.all([publint(config), attw(config)])
+
+    await hooks.callHook('build:done', context)
 
     logger.success(
-      `${first ? 'Build' : 'Rebuild'} complete in ${Math.round(
-        performance.now() - startTime,
-      )}ms`,
+      prettyName(config.name),
+      `${first ? 'Build' : 'Rebuild'} complete in ${green(`${Math.round(performance.now() - startTime)}ms`)}`,
     )
-
+    ab = new AbortController()
     if (typeof onSuccess === 'string') {
       const p = exec(onSuccess, [], {
-        nodeOptions: { shell: true, stdio: 'inherit' },
+        nodeOptions: {
+          shell: true,
+          stdio: 'inherit',
+          signal: ab.signal,
+        },
       })
       p.then(({ exitCode }) => {
         if (exitCode) {
           process.exitCode = exitCode
         }
       })
-      onSuccessCleanup = () => p.kill('SIGTERM')
     } else {
-      await onSuccess?.(config)
+      await onSuccess?.(config, ab.signal)
     }
   }
 }
 
 async function getBuildOptions(
   config: ResolvedOptions,
-  pkg: PackageJson | undefined,
   format: NormalizedFormat,
+  isMultiFormat?: boolean,
   cjsDts?: boolean,
 ): Promise<BuildOptions> {
   const {
@@ -168,20 +207,26 @@ async function getBuildOptions(
     target,
     define,
     shims,
-    fixedExtension,
     tsconfig,
+    cwd,
+    report,
+    env,
+    nodeProtocol,
+    loader,
+    name,
+    unbundle,
   } = config
 
-  const extension = resolveOutputExtension(pkg, format, fixedExtension)
-
   const plugins: RolldownPluginOption = []
-  if (pkg || config.skipNodeModulesBundle) {
-    plugins.push(ExternalPlugin(config, pkg))
+
+  if (nodeProtocol) {
+    plugins.push(NodeProtocolPlugin(nodeProtocol))
   }
-  if (unused && !cjsDts) {
-    const { Unused } = await import('unplugin-unused')
-    plugins.push(Unused.rolldown(unused === true ? {} : unused))
+
+  if (config.pkg || config.skipNodeModulesBundle) {
+    plugins.push(ExternalPlugin(config))
   }
+
   if (dts) {
     const { dts: dtsPlugin } = await import('rolldown-plugin-dts')
     const options: DtsOptions = { tsconfig, ...dts }
@@ -192,46 +237,81 @@ async function getBuildOptions(
       plugins.push(dtsPlugin({ ...options, emitDtsOnly: true }))
     }
   }
-  if (target && !cjsDts) {
-    plugins.push(
-      transformPlugin({
-        target:
-          target && (typeof target === 'string' ? target : target.join(',')),
-        exclude: /\.d\.[cm]?ts$/,
-      }),
-    )
+  if (!cjsDts) {
+    if (unused) {
+      const { Unused } = await import('unplugin-unused')
+      plugins.push(Unused.rolldown(unused === true ? {} : unused))
+    }
+    if (target) {
+      plugins.push(
+        RuntimeHelperCheckPlugin(target),
+        // Use Lightning CSS to handle CSS input. This is a temporary solution
+        // until Rolldown supports CSS syntax lowering natively.
+        await LightningCSSPlugin({ target }),
+      )
+    }
+    plugins.push(ShebangPlugin(cwd, name, isMultiFormat))
   }
-  plugins.push(userPlugins)
+
+  if (report && !logger.silent) {
+    plugins.push(ReportPlugin(report, cwd, cjsDts, name, isMultiFormat))
+  }
+
+  if (!cjsDts) {
+    plugins.push(userPlugins)
+  }
 
   const inputOptions = await mergeUserOptions(
     {
       input: entry,
+      cwd,
       external,
       resolve: {
         alias,
         tsconfigFilename: tsconfig || undefined,
       },
       treeshake,
-      platform,
-      define,
+      platform: cjsDts || format === 'cjs' ? 'node' : platform,
+      define: {
+        ...define,
+        ...Object.keys(env).reduce((acc, key) => {
+          const value = JSON.stringify(env[key])
+          acc[`process.env.${key}`] = value
+          acc[`import.meta.env.${key}`] = value
+          return acc
+        }, Object.create(null)),
+      },
+      transform: {
+        target,
+      },
       plugins,
       inject: {
         ...(shims && !cjsDts && getShimsInject(format, platform)),
       },
+      moduleTypes: loader,
     },
     config.inputOptions,
     [format],
   )
 
+  const [entryFileNames, chunkFileNames] = resolveChunkFilename(
+    config,
+    inputOptions,
+    format,
+  )
   const outputOptions: OutputOptions = await mergeUserOptions(
     {
       format: cjsDts ? 'es' : format,
       name: config.globalName,
       sourcemap,
       dir: outDir,
-      minify,
-      entryFileNames: `[name].${extension}`,
-      chunkFileNames: `[name]-[hash].${extension}`,
+      minify: !cjsDts && minify,
+      entryFileNames,
+      chunkFileNames,
+      preserveModules: unbundle,
+      preserveModulesRoot: unbundle
+        ? lowestCommonAncestor(...Object.values(entry))
+        : undefined,
     },
     config.outputOptions,
     [format],
@@ -244,5 +324,11 @@ async function getBuildOptions(
 }
 
 export { defineConfig } from './config'
+export type {
+  Options,
+  ResolvedOptions,
+  UserConfig,
+  UserConfigFn,
+} from './options'
+export type { BuildContext, TsdownHooks } from './features/hooks'
 export { logger }
-export type { Options, UserConfig }

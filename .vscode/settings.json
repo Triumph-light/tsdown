@@ -1,5 +1,10 @@
 {
   "editor.formatOnSave": true,
-  "eslint.experimental.useFlatConfig": true,
-  "cSpell.words": ["tsdown"]
+  "cSpell.words": ["tsdown"],
+  "files.readonlyInclude": {
+    "docs/**/config-options.md": true,
+    "docs/**/workspace.md": true,
+    "docs/**/type-aliases/*.md": true
+  },
+  "typescript.tsdk": "node_modules/typescript/lib"
 }

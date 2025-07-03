@@ -4,5 +4,10 @@ dist
 *.log
 .DS_Store
 .eslintcache
+tsdown-*.tgz
 
 temp
+
+docs/.vitepress/dist
+docs/.vitepress/cache
+docs/reference/api

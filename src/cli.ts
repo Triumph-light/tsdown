@@ -1,9 +1,11 @@
 import process from 'node:process'
 import { dim } from 'ansis'
 import { cac } from 'cac'
+import debug from 'debug'
 import { VERSION as rolldownVersion } from 'rolldown'
 import { version } from '../package.json'
-import { logger, setSilent } from './utils/logger'
+import { resolveComma, toArray } from './utils/general'
+import { logger } from './utils/logger'
 import type { Options } from './options'
 
 const cli = cac('tsdown')
@@ -12,14 +14,17 @@ cli.help().version(version)
 cli
   .command('[...files]', 'Bundle files', {
     ignoreOptionDefaultValue: true,
+    allowUnknownOptions: true,
   })
   .option('-c, --config <filename>', 'Use a custom config file')
   .option('--no-config', 'Disable config file')
-  .option('--format <format>', 'Bundle format: esm, cjs, iife', {
+  .option('-f, --format <format>', 'Bundle format: esm, cjs, iife', {
     default: 'esm',
   })
-  .option('--clean', 'Clean output directory')
+  .option('--clean', 'Clean output directory, --no-clean to disable')
+  .option('--external <module>', 'Mark dependencies as external')
   .option('--minify', 'Minify output')
+  .option('--debug [feat]', 'Show debug logs')
   .option('--target <target>', 'Bundle target, e.g "es2015", "esnext"')
   .option('--silent', 'Suppress non-error logs')
   .option('-d, --out-dir <dir>', 'Output directory', { default: 'dist' })
@@ -29,13 +34,33 @@ cli
   .option('--platform <platform>', 'Target platform', {
     default: 'node',
   })
-  .option('--dts', 'Generate dts files', { default: false })
+  .option('--dts', 'Generate dts files')
   .option('--publint', 'Enable publint', { default: false })
+  .option('--attw', 'Enable Are the types wrong integration', {
+    default: false,
+  })
   .option('--unused', 'Enable unused dependencies check', { default: false })
   .option('-w, --watch [path]', 'Watch mode')
+  .option('--ignore-watch <path>', 'Ignore custom paths in watch mode')
   .option('--from-vite [vitest]', 'Reuse config from Vite or Vitest')
+  .option('--report', 'Size report', { default: true })
+  .option('--env.* <value>', 'Define compile-time env variables')
+  .option('--on-success <command>', 'Command to run on success')
+  .option('--copy <dir>', 'Copy files to output dir')
+  .option('--public-dir <dir>', 'Alias for --copy, deprecated')
+  .option('--tsconfig <tsconfig>', 'Set tsconfig path')
+  .option('--unbundle', 'Unbundle mode')
+  .option('-W, --workspace [dir]', 'Enable workspace mode')
+  .option(
+    '-F, --filter <pattern>',
+    'Filter workspace packages, e.g. /regex/ or substring',
+  )
+  .option(
+    '--exports',
+    'Generate export-related metadata for package.json (experimental)',
+  )
   .action(async (input: string[], flags: Options) => {
-    setSilent(!!flags.silent)
+    logger.setSilent(!!flags.silent)
     logger.info(
       `tsdown ${dim`v${version}`} powered by rolldown ${dim`v${rolldownVersion}`}`,
     )
@@ -56,10 +81,28 @@ cli
 export async function runCLI(): Promise<void> {
   cli.parse(process.argv, { run: false })
 
+  if (cli.options.debug) {
+    let namespace: string
+    if (cli.options.debug === true) {
+      namespace = 'tsdown:*'
+    } else {
+      // support debugging multiple flags with comma-separated list
+      namespace = resolveComma(toArray(cli.options.debug))
+        .map((v) => `tsdown:${v}`)
+        .join(',')
+    }
+
+    const enabled = debug.disable()
+    if (enabled) namespace += `,${enabled}`
+
+    debug.enable(namespace)
+    debug('tsdown:debug')('Debugging enabled', namespace)
+  }
+
   try {
     await cli.runMatchedCommand()
   } catch (error) {
-    logger.fatal(error)
+    logger.error(error)
     process.exit(1)
   }
 }

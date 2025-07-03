@@ -12,6 +12,17 @@ export function toArray<T>(
   }
 }
 
+export function resolveComma<T extends string>(arr: T[]): T[] {
+  return arr.flatMap((format) => format.split(',') as T[])
+}
+
+export function resolveRegex(str: string): string | RegExp {
+  if (str.length > 2 && str[0] === '/' && str.at(-1) === '/') {
+    return new RegExp(str.slice(1, -1))
+  }
+  return str
+}
+
 export function debounce<T extends (...args: any[]) => any>(
   fn: T,
   wait: number,
@@ -26,4 +37,8 @@ export function debounce<T extends (...args: any[]) => any>(
   } as T
 }
 
-export function typeAsserts<T>(value: any): asserts value is T {}
+export function slash(string: string): string {
+  return string.replaceAll('\\', '/')
+}
+
+export const noop = <T>(v: T): T => v

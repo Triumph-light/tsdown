@@ -1,8 +1,8 @@
 {
   "name": "tsdown",
-  "version": "0.8.1",
-  "packageManager": "pnpm@10.8.1",
-  "description": "An even faster bundler powered by Rolldown.",
+  "version": "0.12.9",
+  "packageManager": "pnpm@10.12.4",
+  "description": "The Elegant Bundler for Libraries",
   "type": "module",
   "license": "MIT",
   "homepage": "https://github.com/rolldown/tsdown#readme",
@@ -19,13 +19,14 @@
     "dist",
     "esm-shims.js"
   ],
-  "main": "./dist/index.js",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
   "exports": {
-    ".": "./dist/index.js",
-    "./config": "./dist/config.js",
-    "./plugins": "./dist/plugins.js",
+    ".": "./dist/index.mjs",
+    "./config": "./dist/config.mjs",
+    "./plugins": "./dist/plugins.mjs",
+    "./run": "./dist/run.mjs",
     "./package.json": "./package.json"
   },
   "typesVersions": {
@@ -37,13 +38,13 @@
     }
   },
   "bin": {
-    "tsdown": "./bin/tsdown.js"
+    "tsdown": "./dist/run.mjs"
   },
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "lint": "eslint --cache .",
+    "lint": "eslint --cache --max-warnings 0 .",
     "lint:fix": "pnpm run lint --fix",
     "build": "tsx ./src/run.ts",
     "dev": "tsx ./src/run.ts",
@@ -51,14 +52,30 @@
     "typecheck": "tsc --noEmit",
     "format": "prettier --cache --write .",
     "release": "bumpp && pnpm publish",
-    "prepublishOnly": "pnpm run build"
+    "prepublishOnly": "pnpm run build",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs",
+    "docs:generate": "tsx ./docs/.vitepress/scripts/docs-generate.ts"
   },
   "peerDependencies": {
+    "@arethetypeswrong/core": "^0.18.1",
     "publint": "^0.3.0",
-    "unplugin-unused": "^0.4.0"
+    "typescript": "^5.0.0",
+    "unplugin-lightningcss": "^0.4.0",
+    "unplugin-unused": "^0.5.0"
   },
   "peerDependenciesMeta": {
+    "@arethetypeswrong/core": {
+      "optional": true
+    },
     "publint": {
+      "optional": true
+    },
+    "typescript": {
+      "optional": true
+    },
+    "unplugin-lightningcss": {
       "optional": true
     },
     "unplugin-unused": {
@@ -66,41 +83,57 @@
     }
   },
   "dependencies": {
-    "ansis": "^3.17.0",
-    "cac": "^6.7.14",
-    "chokidar": "^4.0.3",
-    "consola": "^3.4.2",
-    "debug": "^4.4.0",
-    "diff": "^7.0.0",
-    "find-up-simple": "^1.0.1",
-    "rolldown": "^1.0.0-beta.7",
-    "rolldown-plugin-dts": "^0.7.8",
-    "tinyexec": "^1.0.1",
-    "tinyglobby": "^0.2.12",
-    "unconfig": "^7.3.1"
+    "ansis": "catalog:prod",
+    "cac": "catalog:prod",
+    "chokidar": "catalog:prod",
+    "debug": "catalog:prod",
+    "diff": "catalog:prod",
+    "empathic": "catalog:prod",
+    "hookable": "catalog:prod",
+    "rolldown": "catalog:prod",
+    "rolldown-plugin-dts": "catalog:prod",
+    "semver": "catalog:prod",
+    "tinyexec": "catalog:prod",
+    "tinyglobby": "catalog:prod",
+    "unconfig": "catalog:prod"
   },
   "devDependencies": {
-    "@sxzz/eslint-config": "^6.1.1",
-    "@sxzz/prettier-config": "^2.2.1",
-    "@sxzz/test-utils": "^0.5.5",
-    "@types/debug": "^4.1.12",
-    "@types/diff": "^7.0.2",
-    "@types/node": "^22.14.1",
-    "bumpp": "^10.1.0",
-    "eslint": "^9.24.0",
-    "pkg-types": "^2.1.0",
-    "prettier": "^3.5.3",
-    "publint": "^0.3.12",
-    "tsup": "^8.4.0",
-    "tsx": "^4.19.3",
-    "typescript": "~5.8.3",
-    "unplugin-ast": "^0.14.6",
-    "unplugin-unused": "^0.4.4",
-    "vite": "^6.3.2",
-    "vitest": "^3.1.1"
+    "@arethetypeswrong/core": "catalog:dev",
+    "@sxzz/eslint-config": "catalog:dev",
+    "@sxzz/prettier-config": "catalog:dev",
+    "@sxzz/test-utils": "catalog:dev",
+    "@types/debug": "catalog:dev",
+    "@types/node": "catalog:dev",
+    "@types/semver": "catalog:dev",
+    "@unocss/eslint-plugin": "catalog:docs",
+    "@vueuse/core": "catalog:docs",
+    "bumpp": "catalog:dev",
+    "eslint": "catalog:dev",
+    "lightningcss": "catalog:dev",
+    "oxc-minify": "catalog:docs",
+    "pkg-types": "catalog:dev",
+    "prettier": "catalog:dev",
+    "publint": "catalog:dev",
+    "tsx": "catalog:dev",
+    "typedoc": "catalog:docs",
+    "typedoc-plugin-markdown": "catalog:docs",
+    "typescript": "catalog:dev",
+    "unocss": "catalog:docs",
+    "unplugin-lightningcss": "catalog:dev",
+    "unplugin-unused": "catalog:dev",
+    "vite": "catalog:docs",
+    "vitepress": "catalog:docs",
+    "vitepress-plugin-group-icons": "catalog:docs",
+    "vitepress-plugin-llms": "catalog:docs",
+    "vitest": "catalog:dev",
+    "vue": "catalog:docs"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.19.0"
+  },
+  "resolutions": {
+    "rolldown": "catalog:prod",
+    "vite": "catalog:docs"
   },
   "prettier": "@sxzz/prettier-config"
 }

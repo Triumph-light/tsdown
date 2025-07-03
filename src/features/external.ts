@@ -1,24 +1,20 @@
+import { builtinModules } from 'node:module'
 import Debug from 'debug'
+import { shimFile } from '../index'
 import { toArray } from '../utils/general'
 import type { ResolvedOptions } from '../options'
 import type { PackageJson } from 'pkg-types'
 import type { Plugin } from 'rolldown'
 
 const debug = Debug('tsdown:external')
-const RE_DTS = /\.d\.[cm]?ts$/
 
-export function ExternalPlugin(
-  options: ResolvedOptions,
-  pkg?: PackageJson,
-): Plugin {
-  const deps = pkg && Array.from(getProductionDeps(pkg))
+export function ExternalPlugin(options: ResolvedOptions): Plugin {
+  const deps = options.pkg && Array.from(getProductionDeps(options.pkg))
   return {
     name: 'tsdown:external',
-    async resolveId(id, importer, { isEntry }) {
-      if (isEntry) return
-
-      // skip dts external
-      if (importer && RE_DTS.test(importer)) return
+    async resolveId(id, importer, extraOptions) {
+      if (extraOptions.isEntry) return
+      if (id === shimFile) return
 
       const { noExternal } = options
       if (typeof noExternal === 'function' && noExternal(id, importer)) {
@@ -28,7 +24,11 @@ export function ExternalPlugin(
         const noExternalPatterns = toArray(noExternal)
         if (
           noExternalPatterns.some((pattern) => {
-            return pattern instanceof RegExp ? pattern.test(id) : id === pattern
+            if (pattern instanceof RegExp) {
+              pattern.lastIndex = 0
+              return pattern.test(id)
+            }
+            return id === pattern
           })
         )
           return
@@ -36,8 +36,8 @@ export function ExternalPlugin(
 
       let shouldExternal: boolean | 'absolute' = false
       if (options.skipNodeModulesBundle) {
-        const resolved = await this.resolve(id)
-        if (!resolved) return
+        const resolved = await this.resolve(id, importer, extraOptions)
+        if (!resolved) return resolved
         shouldExternal =
           resolved.external || /[\\/]node_modules[\\/]/.test(resolved.id)
       }
@@ -49,7 +49,14 @@ export function ExternalPlugin(
 
       if (shouldExternal) {
         debug('External dependency:', id)
-        return { id, external: shouldExternal }
+        return {
+          id,
+          external: shouldExternal,
+          moduleSideEffects:
+            id.startsWith('node:') || builtinModules.includes(id)
+              ? false
+              : undefined,
+        }
       }
     },
   }
